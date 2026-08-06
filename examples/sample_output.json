@@ -1,0 +1,10 @@
+[
+  {
+    "product": "Wireless Mouse",
+    "price": "$19.99",
+    "merchant": "TechStore",
+    "rating": 4.5,
+    "reviews": 1234,
+    "url": "https://shopping.google.com/product/123"
+  }
+]
