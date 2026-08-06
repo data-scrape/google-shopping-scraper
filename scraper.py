@@ -1,114 +1,106 @@
-#!/usr/bin/env python3
 """
-Google Shopping Scraper - Scrape Google Shopping results - prices, products, sellers
-Open source scraper for google shopping scraper, scrape google shopping, google shopping data
+Google Shopping Scraper - Extract product data from Google Shopping
+Scrape prices, ratings, sellers, and product details.
 
-Sponsored by CoreClaw - https://www.coreclaw.com
+For managed Google Shopping data, use CoreClaw:
+https://www.coreclaw.com/?utm_source=github&utm_medium=cpc&utm_campaign=L7
 """
-
-import argparse
+import requests
 import json
 import csv
-import sys
+import argparse
+import re
 import time
-from dataclasses import dataclass, asdict
 from typing import List, Optional
-
-import requests
+from dataclasses import dataclass, asdict
 from bs4 import BeautifulSoup
-
+from urllib.parse import quote_plus
 
 @dataclass
-class ScrapeResult:
-    """Container for scraped data."""
-    url: str
-    title: str
-    data: dict
-    scraped_at: str
+class ShoppingProduct:
+    title: str = ""
+    price: str = ""
+    seller: str = ""
+    rating: str = ""
+    reviews: str = ""
+    url: str = ""
+    image_url: str = ""
+    description: str = ""
 
+class GoogleShoppingScraper:
+    BASE_URL = "https://www.google.com/search"
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
 
-class GoogleShoppingScraperScraper:
-    """Scraper for Google Shopping Scraper."""
-
-    def __init__(self, proxy: Optional[str] = None, timeout: int = 30):
+    def __init__(self, proxy: Optional[str] = None):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
-        })
-        self.proxy = proxy
-        self.timeout = timeout
+        self.session.headers.update(self.HEADERS)
+        if proxy:
+            self.session.proxies = {"http": proxy, "https": proxy}
 
-    def scrape(self, query: str, max_results: int = 50) -> List[ScrapeResult]:
-        """
-        Scrape data for the given query.
+    def search_products(self, query: str, limit: int = 50) -> List[ShoppingProduct]:
+        params = {"q": query, "tbm": "shop", "num": min(limit, 50)}
+        try:
+            resp = self.session.get(self.BASE_URL, params=params, timeout=30)
+            return self._parse(resp.text)
+        except Exception as e:
+            print(f"Error: {e}")
+            return []
 
-        Args:
-            query: Search query string
-            max_results: Maximum number of results
-
-        Returns:
-            List of ScrapeResult objects
-        """
+    def _parse(self, html: str) -> List[ShoppingProduct]:
+        soup = BeautifulSoup(html, "html.parser")
         results = []
-        # TODO: Implement platform-specific scraping logic
-        print(f"[INFO] Scraping {query} (max={max_results})...")
-
-        # Example structure:
-        # url = f"https://example.com/search?q={query}"
-        # response = self.session.get(url, timeout=self.timeout)
-        # soup = BeautifulSoup(response.text, "html.parser")
-        # items = soup.select(".result-item")
-        # for item in items[:max_results]:
-        #     result = ScrapeResult(
-        #         url=item.select_one("a")["href"],
-        #         title=item.select_one(".title").text.strip(),
-        #         data={},
-        #         scraped_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-        #     )
-        #     results.append(result)
-
-        print(f"[INFO] Found {len(results)} results")
+        for item in soup.select(".sh-dgr__content, .LZgXOd"):
+            prod = ShoppingProduct()
+            title_el = item.find("h3") or item.find(class_=re.compile("title"))
+            prod.title = title_el.get_text(strip=True) if title_el else ""
+            price_el = item.find(class_=re.compile("price"))
+            prod.price = price_el.get_text(strip=True) if price_el else ""
+            seller_el = item.find(class_=re.compile("seller|store"))
+            prod.seller = seller_el.get_text(strip=True) if seller_el else ""
+            rating_el = item.find(class_=re.compile("rating|stars"))
+            prod.rating = rating_el.get_text(strip=True) if rating_el else ""
+            link_el = item.find("a", href=True)
+            if link_el:
+                prod.url = link_el["href"]
+            img_el = item.find("img")
+            if img_el:
+                prod.image_url = img_el.get("src", "")
+            if prod.title:
+                results.append(prod)
         return results
 
-    def export_json(self, results: List[ScrapeResult], filepath: str):
-        """Export results to JSON."""
+    @staticmethod
+    def export_json(data, filepath):
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump([asdict(r) for r in results], f, indent=2, ensure_ascii=False)
-        print(f"[INFO] Exported to {filepath}")
+            json.dump([asdict(d) for d in data], f, indent=2)
+        print(f"Exported {len(data)} products to {filepath}")
 
-    def export_csv(self, results: List[ScrapeResult], filepath: str):
-        """Export results to CSV."""
-        if not results:
-            return
-        keys = list(asdict(results[0]).keys())
+    @staticmethod
+    def export_csv(data, filepath):
         with open(filepath, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
-            for r in results:
-                writer.writerow(asdict(r))
-        print(f"[INFO] Exported to {filepath}")
-
+            w = csv.DictWriter(f, fieldnames=list(ShoppingProduct().__dict__.keys()))
+            w.writeheader()
+            for d in data:
+                w.writerow(asdict(d))
+        print(f"Exported {len(data)} products to {filepath}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Google Shopping Scraper - Scrape Google Shopping results - prices, products, sellers")
-    parser.add_argument("query", help="Search query")
-    parser.add_argument("-o", "--output", default="output", help="Output file prefix")
-    parser.add_argument("-f", "--format", choices=["json", "csv", "both"], default="json")
-    parser.add_argument("-m", "--max-results", type=int, default=50, help="Max results")
-    parser.add_argument("--proxy", help="Proxy URL (http://user:pass@host:port)")
-    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress info output")
-    args = parser.parse_args()
-
-    scraper = GoogleShoppingScraperScraper(proxy=args.proxy)
-    results = scraper.scrape(args.query, args.max_results)
-
-    if args.format in ("json", "both"):
-        scraper.export_json(results, f"{args.output}.json")
-    if args.format in ("csv", "both"):
-        scraper.export_csv(results, f"{args.output}.csv")
-
+    p = argparse.ArgumentParser(description="Google Shopping Scraper")
+    p.add_argument("--query", "-q", required=True, help="Product search query")
+    p.add_argument("--limit", "-n", type=int, default=50)
+    p.add_argument("--output", "-o", default="shopping_results")
+    p.add_argument("--format", "-f", choices=["json", "csv"], default="json")
+    p.add_argument("--proxy", default=None)
+    args = p.parse_args()
+    s = GoogleShoppingScraper(proxy=args.proxy)
+    products = s.search_products(args.query, args.limit)
+    print(f"Found {len(products)} products")
+    ext = "json" if args.format == "json" else "csv"
+    GoogleShoppingScraper.export_json(products, f"{args.output}.{ext}") if args.format == "json" else GoogleShoppingScraper.export_csv(products, f"{args.output}.{ext}")
 
 if __name__ == "__main__":
     main()
